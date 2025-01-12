@@ -1,4 +1,4 @@
-## OvervieW
+## Overview
 
 The script utilizes pre-trained models for age and gender prediction. It performs face detection using the Haar Cascade classifier and then predicts the age and gender of each detected face.
 
