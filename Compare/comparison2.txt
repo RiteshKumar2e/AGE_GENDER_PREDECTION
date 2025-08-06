@@ -1,0 +1,6 @@
+=== COORDINATE COMPARISON ===
+Face Difference: dx=5, dy=0
+Eye 1 Diff: dx=4, dy=3
+Eye 2 Diff: dx=4, dy=1
+
+Timestamp: 2025-08-06 19:40:10.751543
