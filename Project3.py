@@ -1,105 +1,119 @@
 import cv2
+import os
+import hashlib
+import numpy as np
+import time
+from datetime import datetime
 
-# Load pre-trained models
-age_net = cv2.dnn.readNetFromCaffe('age_deploy (2).prototxt', 'age_net (1).caffemodel')
-gender_net = cv2.dnn.readNetFromCaffe('gender_deploy (2).prototxt', 'gender_net (1).caffemodel')
+# Folder setup
+EMPLOYEE_FOLDER = 'employee'
+os.makedirs(EMPLOYEE_FOLDER, exist_ok=True)
 
-def predict_age_and_gender(image, face_rect, age_threshold, gender_threshold):
-    # Extract face from image
-    x, y, w, h = face_rect
-    face = image[y:y+h, x:x+w]
+# Load Haar Cascades
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade  = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
 
-    # Preprocess the face
-    blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), (78.4263377603, 87.7689143744, 114.895847746), swapRB=False)
+# Helper to capture and save an image and coordinates
+def capture_and_save(cap, emp_id):
+    face_data = {}
+    face_detected_time = None
+    saved = False
 
-    # Predict gender
-    gender_net.setInput(blob)
-    gender_preds = gender_net.forward()
-    gender_confidence = gender_preds[0].max()
-    gender_label = gender_preds[0].argmax() 
+    while not saved:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    # Gender prediction logic
-    if gender_label == 0:  # Male
-        gender_color = (0,255,0) #Green 
-        gender_text = 'Male'
-    else:  # Female
-        gender_color = (0, 0, 255)  # Red
-        gender_text = 'Female'
+        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
 
-    # Check gender confidence
-    if gender_confidence < gender_threshold:
-        gender_text = 'Uncertain'
-        gender_color = (255,0,0)  # Blue
+        if len(faces) == 1:
+            (x, y, w, h) = faces[0]
+            roi_gray = gray[y:y+h, x:x+w]
+            roi_color = frame[y:y+h, x:x+w]
 
-    # Predict age
-    age_net.setInput(blob)
-    age_preds = age_net.forward()
-    age_confidence = max(age_preds[0])
-    age_index = age_preds[0].argmax()
+            eye_coords = []
+            eyes = eye_cascade.detectMultiScale(roi_gray)
+            for (ex, ey, ew, eh) in eyes:
+                eye_x, eye_y = x + ex, y + ey
+                eye_coords.append((eye_x, eye_y))
+                cv2.rectangle(frame, (eye_x, eye_y), (eye_x + ew, eye_y + eh), (255, 255, 0), 2)
+                cv2.putText(frame, f"Eye: ({eye_x},{eye_y})", (eye_x, eye_y - 5),
+                            cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 255, 0), 1)
 
-    # Define age ranges
-    age_ranges = [(i * 5, i * 5 + 4) for i in range(0, 20)]
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.putText(frame, f"Face: ({x},{y})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
 
-    # Determine age range
-    age_min, age_max = age_ranges[age_index]
+            if face_detected_time is None:
+                face_detected_time = time.time()
+                print(f"[INFO] Face detected. Saving image in 5 seconds...")
 
-    # Adjust age if confidence is low
-    if age_confidence <= age_threshold:
-        age_min, age_max = 0, 100
+            elapsed = time.time() - face_detected_time
+            if elapsed >= 5:
+                # Save image
+                img_filename = f'emp_{emp_id}.jpg'
+                txt_filename = f'emp_{emp_id}.txt'
+                img_path = os.path.join(EMPLOYEE_FOLDER, img_filename)
+                txt_path = os.path.join(EMPLOYEE_FOLDER, txt_filename)
 
-    age = f'{age_min}-{age_max}'
+                cv2.imwrite(img_path, frame)
+                print(f"[INFO] Saved {img_filename}")
 
-    return gender_text, gender_color, age
+                # Save coordinates
+                with open(txt_path, 'w') as f:
+                    f.write(f"Face: x={x}, y={y}, w={w}, h={h}\n")
+                    for i, (eye_x, eye_y) in enumerate(eye_coords):
+                        f.write(f"Eye {i+1}: x={eye_x}, y={eye_y}\n")
+                    f.write(f"Timestamp: {datetime.now()}\n")
 
-# Load images
-image_paths = ['image1.jpg', 'image2.jpg', 'image3.jpg']
+                face_data['image'] = frame
+                face_data['face'] = (x, y, w, h)
+                face_data['eyes'] = eye_coords
+                saved = True
 
-# Process each image and display predictions for males and females
-for image_path in image_paths:
-    image = cv2.imread(image_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        cv2.imshow(f"Panel {emp_id}", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-    # Perform face detection
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    
-    # Adjust the scale factor and min neighbors
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
+    return face_data
 
-    # Store predictions for each face
-    predictions = []
+# Compare face and eye coordinates
+def compare_coordinates(data1, data2):
+    print("\n=== COORDINATE COMPARISON ===")
+    f1 = data1['face']
+    f2 = data2['face']
+    print(f"Face Difference: dx={abs(f1[0]-f2[0])}, dy={abs(f1[1]-f2[1])}")
 
-    # Predict age and gender for each face
-    for (x, y, w, h) in faces:
-        gender_text, gender_color, age = predict_age_and_gender(image, (x, y, w, h), age_threshold=0.3, gender_threshold=0.5)
+    eyes1 = data1['eyes']
+    eyes2 = data2['eyes']
 
-        # Draw rectangle around the face
-        cv2.rectangle(image, (x, y), (x+w, y+h), gender_color, 2)
-        # Draw text with gender and age
-        cv2.putText(image, f'Gender: {gender_text}', (x, y-20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, gender_color, 2)
-        cv2.putText(image, f'Age: {age}', (x, y-40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, gender_color, 2)
+    min_eyes = min(len(eyes1), len(eyes2))
+    for i in range(min_eyes):
+        ex1, ey1 = eyes1[i]
+        ex2, ey2 = eyes2[i]
+        print(f"Eye {i+1} Diff: dx={abs(ex1 - ex2)}, dy={abs(ey1 - ey2)}")
 
-        predictions.append((gender_text, age))
+# Main
+cap = cv2.VideoCapture(0)
+print("[STEP 1] Capturing first face in 5 seconds...")
+data1 = capture_and_save(cap, emp_id=1)
 
-    # If no faces detected, draw a box and display text
-    if len(faces) == 0:
-        # Define coordinates for the rectangle box
-        start_point = (int(image.shape[1] * 0.25), int(image.shape[0] * 0.25))  # Start point of the rectangle
-        end_point = (int(image.shape[1] * 0.75), int(image.shape[0] * 0.75))    # End point of the rectangle
-        cv2.rectangle(image, start_point, end_point, (0, 0, 255), 2)              # Red rectangle
-        cv2.putText(image, "No face detected", (start_point[0], start_point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+print("\n[STEP 2] Capturing second face in 5 seconds...")
+data2 = capture_and_save(cap, emp_id=2)
 
-    # Display the image with predictions or empty rectangle
-    cv2.imshow('Image', image)
-    cv2.waitKey(0)
-
-    # Print predictions for each face or a message if no faces detected
-    print("Predictions for", image_path)
-    if len(faces) == 0:
-        print("No faces detected")
-    else:
-        for i, (gender, age) in enumerate(predictions):
-            print(f"Face {i+1}: Gender - {gender}, Age - {age}")
-    print("\n")
-
+# Close camera and windows
+cap.release()
 cv2.destroyAllWindows()
 
+# Combine and display both panels side by side
+if data1 and data2:
+    img1 = cv2.resize(data1['image'], (400, 400))
+    img2 = cv2.resize(data2['image'], (400, 400))
+    combined = np.hstack((img1, img2))
+    cv2.imshow("Panel 1 (Left) vs Panel 2 (Right)", combined)
+    compare_coordinates(data1, data2)
+    print("\nPress any key to close...")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+else:
+    print("Face data missing. Could not compare.")
